@@ -149,7 +149,7 @@ __ALIGN_BEGIN static uint8_t USBD_HID_CfgDesc[USB_HID_CONFIG_DESC_SIZ] __ALIGN_E
 #endif /* USBD_SELF_POWERED */
   USBD_MAX_POWER,                                     /* MaxPower (mA) */
 
-  /************** Descriptor of Joystick Mouse interface ****************/
+  /************** Descriptor of Mouse/Keyboard/Joystick interface ****************/
   /* 09 */
   0x09,                                               /* bLength: Interface Descriptor size */
   USB_DESC_TYPE_INTERFACE,                            /* bDescriptorType: Interface descriptor type */
@@ -160,7 +160,7 @@ __ALIGN_BEGIN static uint8_t USBD_HID_CfgDesc[USB_HID_CONFIG_DESC_SIZ] __ALIGN_E
   0x01,                                               /* bInterfaceSubClass : 1=BOOT, 0=no boot */
   0x02,                                               /* nInterfaceProtocol : 0=none, 1=keyboard, 2=mouse */
   0,                                                  /* iInterface: Index of string descriptor */
-  /******************** Descriptor of Joystick Mouse HID ********************/
+  /******************** Descriptor of Mouse/Keyboard/Joystick HID ********************/
   /* 18 */
   0x09,                                               /* bLength: HID Descriptor size */
   HID_DESCRIPTOR_TYPE,                                /* bDescriptorType: HID */
@@ -196,7 +196,11 @@ __ALIGN_BEGIN static uint8_t USBD_HID_Desc[USB_HID_DESC_SIZ] __ALIGN_END =
   0x00,                                               /* bCountryCode: Hardware target country */
   0x01,                                               /* bNumDescriptors: Number of HID class descriptors to follow */
   0x22,                                               /* bDescriptorType */
+#ifndef HID_IS_KEYBOARD
   HID_MOUSE_REPORT_DESC_SIZE,                         /* wItemLength: Total length of Report descriptor */
+#else
+  HID_KEYBOARD_REPORT_DESC_SIZE,
+#endif /* HID_IS_KEYBOARD */
   0x00,
 };
 
@@ -217,6 +221,7 @@ __ALIGN_BEGIN static uint8_t USBD_HID_DeviceQualifierDesc[USB_LEN_DEV_QUALIFIER_
 };
 #endif /* USE_USBD_COMPOSITE  */
 
+#ifndef HID_IS_KEYBOARD
 __ALIGN_BEGIN static uint8_t HID_MOUSE_ReportDesc[HID_MOUSE_REPORT_DESC_SIZE] __ALIGN_END =
 {
   0x05, 0x01,        /* Usage Page (Generic Desktop Ctrls)     */
@@ -245,19 +250,45 @@ __ALIGN_BEGIN static uint8_t HID_MOUSE_ReportDesc[HID_MOUSE_REPORT_DESC_SIZE] __
   0x95, 0x03,        /*     Report Count (3)                   */
   0x81, 0x06,        /*     Input (Data,Var,Rel)               */
   0xC0,              /*   End Collection                       */
-  0x09, 0x3C,        /*   Usage (Motion Wakeup)                */
-  0x05, 0xFF,        /*   Usage Page (Reserved 0xFF)           */
-  0x09, 0x01,        /*   Usage (0x01)                         */
+  0xC0               /* End Collection                         */
+};
+#else
+__ALIGN_BEGIN static uint8_t HID_KEYBOARD_ReportDesc[HID_KEYBOARD_REPORT_DESC_SIZE] __ALIGN_END =
+{
+  0x05, 0x01,        /* Usage Page (Generic Desktop)           */
+  0x09, 0x06,        /* Usage (Keyboard)                       */
+  0xA1, 0x01,        /* Collection (Application)               */
+  0x05, 0x07,        /*   Usage Page (Keyboard/Keypad)         */
+  0x19, 0xE0,        /*   Usage Minimum (224)                  */
+  0x29, 0xE7,        /*   Usage Maximum (231)                  */
   0x15, 0x00,        /*   Logical Minimum (0)                  */
   0x25, 0x01,        /*   Logical Maximum (1)                  */
   0x75, 0x01,        /*   Report Size (1)                      */
-  0x95, 0x02,        /*   Report Count (2)                     */
-  0xB1, 0x22,        /*   Feature (Data,Var,Abs,NoWrp)         */
-  0x75, 0x06,        /*   Report Size (6)                      */
+  0x95, 0x08,        /*   Report Count (8)                     */
+  0x81, 0x02,        /*   Input (Data,Var,Abs)                 */
   0x95, 0x01,        /*   Report Count (1)                     */
-  0xB1, 0x01,        /*   Feature (Const,Array,Abs,NoWrp)      */
+  0x75, 0x08,        /*   Report Size (8)                      */
+  0x81, 0x01,        /*   Input (Const,Array,Abs)              */
+  0x95, 0x06,        /*   Report Count (6)                     */
+  0x75, 0x08,        /*   Report Size (8)                      */
+  0x15, 0x00,        /*   Logical Minimum (0)                  */
+  0x25, 0x65,        /*   Logical Maximum (101)                */
+  0x05, 0x07,        /*   Usage Page (Keyboard/Keypad)         */
+  0x19, 0x00,        /*   Usage Minimum (0)                    */
+  0x29, 0x65,        /*   Usage Maximum (101)                  */
+  0x81, 0x00,        /*   Input (Data,Array,Abs)               */
+  0x05, 0x08,        /*   Usage Page (LEDs)                    */
+  0x19, 0x01,        /*   Usage Minimum (Num Lock)             */
+  0x29, 0x05,        /*   Usage Maximum (Kana)                 */
+  0x95, 0x05,        /*   Report Count (5)                     */
+  0x75, 0x01,        /*   Report Size (1)                      */
+  0x91, 0x02,        /*   Output (Data,Var,Abs)                */
+  0x95, 0x01,        /*   Report Count (1)                     */
+  0x75, 0x03,        /*   Report Size (3)                      */
+  0x91, 0x01,        /*   Output (Const,Array,Abs)             */
   0xC0               /* End Collection                         */
 };
+#endif /* HID_IS_KEYBOARD */
 
 static uint8_t HIDInEpAdd = HID_EPIN_ADDR;
 
@@ -412,8 +443,13 @@ static uint8_t USBD_HID_Setup(USBD_HandleTypeDef *pdev, USBD_SetupReqTypedef *re
         case USB_REQ_GET_DESCRIPTOR:
           if ((req->wValue >> 8) == HID_REPORT_DESC)
           {
+#ifndef HID_IS_KEYBOARD
             len = MIN(HID_MOUSE_REPORT_DESC_SIZE, req->wLength);
             pbuf = HID_MOUSE_ReportDesc;
+#else
+            len = MIN(HID_KEYBOARD_REPORT_DESC_SIZE, req->wLength);
+            pbuf = HID_KEYBOARD_ReportDesc;
+#endif /* HID_IS_KEYBOARD */
           }
           else if ((req->wValue >> 8) == HID_DESCRIPTOR_TYPE)
           {

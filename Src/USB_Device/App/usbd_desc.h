@@ -92,7 +92,7 @@ extern "C" {
   * @{
   */
 
-extern USBD_DescriptorsTypeDef     HID_Desc;
+extern USBD_DescriptorsTypeDef     CMPST_Desc;
 
 
 

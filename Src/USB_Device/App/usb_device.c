@@ -21,20 +21,24 @@
 #include "usb_device.h"
 #include "usbd_core.h"
 #include "usbd_desc.h"
-#include "usbd_hid.h"
+#include "usbd_composite_builder.h"
+#include "usbd_cdc_if.h"
 
 #include "main.h"
 
 /* Private variables ---------------------------------------------------------*/
-__IO uint32_t remotewakeupon = 0;
-uint8_t HID_Buffer[4];
-
 extern PCD_HandleTypeDef hpcd_USB1_OTG_HS;
 
-#define CURSOR_STEP     5
+uint8_t HID_Keyboard_Buffer[8];
+
+/* Classes ID */
+uint8_t CDC_InstID, HID_InstID = 0;
+
+/* HID Endpoint Address */
+uint8_t HID_EpAdress = HID_EPIN_ADDR;
+uint8_t CDC_EpAdd_Inst1[3] = {CDC_IN_EP, CDC_OUT_EP, CDC_CMD_EP}; /* CDC Endpoint Address First Instance */
 
 /* Private function prototypes -----------------------------------------------*/
-static void GetPointerData(uint8_t *pbuf);
 extern void SystemClockConfig_Resume(void);
 
 /* USB Device Core handle declaration. */
@@ -49,91 +53,124 @@ extern USBD_DescriptorsTypeDef HID_Desc;
  * -- Insert your external function declaration here --
  */
 
-/**
-  * @brief  Gets Pointer Data.
-  * @param  pbuf: Pointer to report
-  * @retval None
-  */
-void GetPointerData(uint8_t *pbuf)
-{
-  static int8_t cnt = 0;
-  int8_t x = 0, y = 0;
-
-  if (cnt++ > 0)
-  {
-    x = CURSOR_STEP;
-  }
-  else
-  {
-    x = -CURSOR_STEP;
-  }
-  pbuf[0] = 0;
-  pbuf[1] = x;
-  pbuf[2] = y;
-  pbuf[3] = 0;
-}
 
 /**
-  * @brief  GPIO EXTI Callback function
-  *         Handle remote-wakeup through key button
-  * @param  GPIO_Pin
-  * @retval None
-  */
-void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin)
+ * @breif Depress only the keys given in the key_buff array
+ * @param key_buff Array of key codes
+ * @param len Length of key_buff (must not exceed 6 keys)
+ * @retval None
+ */
+void USB_Device_DepressOnly(uint8_t *key_buff, uint8_t len)
 {
-  if (GPIO_Pin == BUTTON_KEY_PIN)
+  uint8_t i, j;
+  uint8_t flag_remove;
+  uint8_t flag_update;
+
+  if (len < 0)
   {
-    if ((((USBD_HandleTypeDef *) hpcd_USB1_OTG_HS.pData)->dev_remote_wakeup == 1) &&
-        (((USBD_HandleTypeDef *) hpcd_USB1_OTG_HS.pData)->dev_state ==
-         USBD_STATE_SUSPENDED))
+    return;
+  }
+
+  /* 6 keys may be specified at the most */
+  if (len > 6)
+  {
+    len = 6;
+  }
+
+  flag_update = 0;
+
+  /* remove currently depressed keys not in the list and un-list any keys currently depressed*/
+  for (j = 2; j < 8; j++)
+  {
+    if (HID_Keyboard_Buffer[j] != KEY_NONE)
     {
-#ifndef USBD_LPM_SLEEP_CONFIG
-      if ((&hpcd_USB1_OTG_HS)->Init.low_power_enable)
+      flag_remove = 1;
+      for (i = 0; i < len; i++)
       {
-        SystemClockConfig_Resume();
-        __HAL_PCD_UNGATE_PHYCLOCK(&hpcd_USB1_OTG_HS);
+        if (HID_Keyboard_Buffer[j] == key_buff[i])
+        {
+          key_buff[i] = KEY_NONE;
+          flag_remove = 0;
+          // don't break to handle duplicate items in list
+        }
       }
-#endif
-      /* Activate Remote wakeup */
-      HAL_PCD_ActivateRemoteWakeup((&hpcd_USB1_OTG_HS));
-
-      /* Remote wakeup delay */
-      HAL_Delay(10);
-
-      /* Disable Remote wakeup */
-      HAL_PCD_DeActivateRemoteWakeup((&hpcd_USB1_OTG_HS));
-
-      /* change state to configured */
-      ((USBD_HandleTypeDef *) hpcd_USB1_OTG_HS.pData)->dev_state = USBD_STATE_CONFIGURED;
-
-      /* Change remote_wakeup feature to 0 */
-      ((USBD_HandleTypeDef *) hpcd_USB1_OTG_HS.pData)->dev_remote_wakeup = 0;
-      remotewakeupon = 1;
+      if (flag_remove == 1)
+      {
+        HID_Keyboard_Buffer[j] = KEY_NONE;
+        flag_update = 1;
+      }
     }
-    else if (((USBD_HandleTypeDef *) hpcd_USB1_OTG_HS.pData)->dev_state == USBD_STATE_CONFIGURED)
+  }
+
+  /* Now there's no overlap. Add remaining item in list to be depressed. */
+  for (i = 0; i < len; i++)
+  {
+    if (key_buff[i] != KEY_NONE)
     {
-      GetPointerData(HID_Buffer);
-      USBD_HID_SendReport(&hUsbDeviceHS, HID_Buffer, 4);
+      for (j = 2; j < 8; j++)
+      {
+        if (HID_Keyboard_Buffer[j] == KEY_NONE)
+        {
+          HID_Keyboard_Buffer[j] = key_buff[i];
+          flag_update = 1;
+          break;
+        }
+      }
     }
+  }
+
+  if (flag_update == 1)
+  {
+    USBD_HID_SendReport(&hUsbDeviceHS, HID_Keyboard_Buffer, 8, HID_InstID);
   }
 }
 
 
 /**
-  * Init USB device Library, add supported class and start the library
+  * Init USB device Library, add supported classes and start the library
   * @retval None
   */
-void MX_USB_Device_Init(void)
+void USB_Device_Init(void)
 {
-  /* Init Device Library, add supported class and start the library. */
-  if (USBD_Init(&hUsbDeviceHS, &HID_Desc, DEVICE_HS) != USBD_OK)
+  /* Init Device Library */
+  if (USBD_Init(&hUsbDeviceHS, &CMPST_Desc, DEVICE_HS) != USBD_OK)
   {
-    Error_Handler();
+    assert(0);
   }
-  if (USBD_RegisterClass(&hUsbDeviceHS, &USBD_HID) != USBD_OK)
+
+  /* Store HID instance Class ID */
+  HID_InstID = hUsbDeviceHS.classId;
+
+  /* Register the HID  class */
+  if (USBD_RegisterClassComposite(&hUsbDeviceHS, USBD_HID_CLASS, CLASS_TYPE_HID, &HID_EpAdress) != USBD_OK)
   {
-    Error_Handler();
+    assert(0);
   }
+
+  /* Store CDC instance Class ID */
+  CDC_InstID = hUsbDeviceHS.classId;
+
+  /* Register CDC class  */
+  if (USBD_RegisterClassComposite(&hUsbDeviceHS, USBD_CDC_CLASS, CLASS_TYPE_CDC, CDC_EpAdd_Inst1) != USBD_OK)
+  {
+    assert(0);
+  }
+
+  /* Add CDC Interface */
+  if (USBD_CMPSIT_SetClassID(&hUsbDeviceHS, CLASS_TYPE_CDC, 0) != 0xFF)
+  {
+    if (USBD_CDC_RegisterInterface(&hUsbDeviceHS, &USBD_CDC_fops) != USBD_OK)
+    {
+      assert(0);
+    }
+  }
+
+  if (USBD_Start(&hUsbDeviceHS) != USBD_OK)
+  {
+    assert(0);
+  }
+
+  memset(HID_Keyboard_Buffer, 0x00, sizeof(HID_Keyboard_Buffer));
 }
 
 /**

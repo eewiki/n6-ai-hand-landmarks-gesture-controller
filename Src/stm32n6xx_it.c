@@ -22,6 +22,7 @@
 
 #include "cmw_camera.h"
 extern GPU2D_HandleTypeDef hgpu2d;
+extern PCD_HandleTypeDef hpcd_USB1_OTG_HS;
 
 /**
   * @brief   This function handles NMI exception.
@@ -108,4 +109,20 @@ void GPU2D_IRQHandler(void)
 void GPU2D_ER_IRQHandler(void)
 {
   HAL_GPU2D_ER_IRQHandler(&hgpu2d);
+}
+
+/**
+* @brief  This function handles USB-On-The-Go HS global interrupt interrupt.
+* @param  None
+* @retval None
+*/
+void USB1_OTG_HS_IRQHandler(void)
+{
+  /* USER CODE BEGIN OTG_HS_IRQHandler 0 */
+
+  /* USER CODE END OTG_HS_IRQHandler 0 */
+  HAL_PCD_IRQHandler(&hpcd_USB1_OTG_HS);
+  /* USER CODE BEGIN OTG_HS_IRQHandler 1 */
+
+  /* USER CODE END OTG_HS_IRQHandler 1 */
 }

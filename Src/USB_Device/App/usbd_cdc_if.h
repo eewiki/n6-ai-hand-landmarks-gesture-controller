@@ -27,14 +27,21 @@
 /* Exported constants --------------------------------------------------------*/
 /* User can use this section to tailor USARTx/UARTx instance used and associated
    resources */
+typedef enum CDC_App_State
+{
+  CDC_APP_STATE_MENU,
+  CDC_APP_STATE_GAME1,
+  CDC_APP_STATE_GAME2,
+  CDC_APP_STATE_MAX
+} CDC_App_State_t;
 
-/* Periodically, the state of the buffer "UserTxBuffer" is checked.
-   The period depends on CDC_POLLING_INTERVAL */
-#define CDC_POLLING_INTERVAL             5 /* in ms. The max is 65ms and the min is 1ms */
 
 extern USBD_CDC_ItfTypeDef  USBD_CDC_fops;
+extern volatile CDC_App_State_t      ext_app_state;
 
 /* Exported macro ------------------------------------------------------------*/
 /* Exported functions ------------------------------------------------------- */
+uint8_t CDC_Itf_Transmit(uint8_t* Buf, uint16_t Len);
+
 #endif /* __USBD_CDC_IF_H */
 

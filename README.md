@@ -192,7 +192,7 @@ make -j8
 After building the application, you must add a signature to the binary file:
 
 ```bash
-STM32_SigningTool_CLI -bin build/Project.bin -nk -t ssbl -hv 2.3 -o build/Project_sign.bin
+STM32_SigningTool_CLI -bin build/Project.bin -nk -t ssbl -hv 2.3 -align -o build/Project_sign.bin
 ```
 
 Program the signed binary at address `0x70100000`, as well as the FSBL and network parameters.

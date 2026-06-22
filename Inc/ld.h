@@ -26,7 +26,7 @@
 #define LD_LANDMARK_NB        21
 #define LD_BINDING_NB         21
 /* you can tune this */
-#define LD_PROB_THRESHOLD     0.25f
+#define LD_PROB_THRESHOLD     0.5f //0.25
 
 typedef struct {
   float x;

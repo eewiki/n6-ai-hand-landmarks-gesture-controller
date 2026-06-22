@@ -25,10 +25,22 @@
 
 
 /* Private typedef -----------------------------------------------------------*/
+
+typedef struct
+{
+  uint32_t size[MAX_PAGE_NUMBER + 1];     /* Sizes Table to allow safe deallocation */
+  uint8_t PageTable[MAX_PAGE_NUMBER + 1]; /* Memory page state table '1'-> Allocated '0' -> Free */
+  uint8_t pages[MAX_PAGE_NUMBER + 1][SIZE_OF_PAGE] __attribute__((__aligned__(4)));
+} mem_TypeDef;
+
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 
 /* Private variables ---------------------------------------------------------*/
+
+static mem_TypeDef usbd_memory_pool;
+static mem_TypeDef *memory_pool;
+
 /* Private variables ---------------------------------------------------------*/
 
 
@@ -72,22 +84,22 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef *pcdHandle)
     */
     RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USBOTGHS1;
-    PeriphClkInitStruct.UsbOtgHs1ClockSelection = RCC_USBPHY1REFCLKSOURCE_HSE_DIRECT;
+    PeriphClkInitStruct.UsbOtgHs1ClockSelection = RCC_USBOTGHS1CLKSOURCE_HSE_DIRECT;
 
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       /* Initialization Error */
-      Error_Handler();
+      assert(0);
     }
 
     /** Set USB OTG HS PHY1 Reference Clock Source */
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USBPHY1;
-    PeriphClkInitStruct.UsbPhy1ClockSelection = RCC_USBPHY1REFCLKSOURCE_HSE_DIRECT;
+    PeriphClkInitStruct.UsbPhy1ClockSelection = RCC_USBPHY1CLKSOURCE_HSE_DIRECT;
 
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       /* Initialization Error */
-      Error_Handler();
+      assert(0);
     }
 
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -103,7 +115,9 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef *pcdHandle)
     __HAL_RCC_USB1_OTG_HS_CLK_ENABLE();
 
     /* Required few clock cycles before accessing USB PHY Controller Registers */
-    HAL_Delay(1);
+    for (volatile uint32_t i = 0; i < 10; i++) {
+        __NOP(); // No Operation instruction to create a delay
+    }
 
     USB1_HS_PHYC->USBPHYC_CR &= ~(0x7 << 0x4);
 
@@ -115,8 +129,9 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef *pcdHandle)
     __HAL_RCC_USB1_OTG_HS_PHY_RELEASE_RESET();
 
     /* Required few clock cycles before Releasing Reset */
-    HAL_Delay(1);
-
+    for (volatile uint32_t i = 0; i < 10; i++) {
+        __NOP(); // No Operation instruction to create a delay
+    }
     __HAL_RCC_USB1_OTG_HS_RELEASE_RESET();
 
     /* Peripheral PHY clock enable */
@@ -239,7 +254,7 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
 
   if (hpcd->Init.speed != PCD_SPEED_HIGH)
   {
-    Error_Handler();
+    assert(0);
   }
   /* Set Speed. */
   USBD_LL_SetSpeed((USBD_HandleTypeDef *)hpcd->pData, speed);
@@ -386,6 +401,11 @@ void HAL_PCD_DisconnectCallback(PCD_HandleTypeDef *hpcd)
   */
 USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
 {
+  memset(&usbd_memory_pool, 0U, sizeof(usbd_memory_pool));
+  memory_pool = &usbd_memory_pool;
+
+  memset(&hpcd_USB1_OTG_HS, 0x0, sizeof(PCD_HandleTypeDef));
+
   hpcd_USB1_OTG_HS.pData = pdev;
   pdev->pData = &hpcd_USB1_OTG_HS;
 
@@ -403,7 +423,7 @@ USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
   /* Initialize LL Driver */
   if (HAL_PCD_Init(&hpcd_USB1_OTG_HS) != HAL_OK)
   {
-    Error_Handler();
+    assert(0);
   }
 
 #if (USE_HAL_PCD_REGISTER_CALLBACKS == 1U)
@@ -421,9 +441,12 @@ USBD_StatusTypeDef USBD_LL_Init(USBD_HandleTypeDef *pdev)
   HAL_PCD_RegisterIsoOutIncpltCallback(&hpcd_USB1_OTG_HS, PCD_ISOOUTIncompleteCallback);
   HAL_PCD_RegisterIsoInIncpltCallback(&hpcd_USB1_OTG_HS, PCD_ISOINIncompleteCallback);
 #endif /* USE_HAL_PCD_REGISTER_CALLBACKS */
+
   HAL_PCDEx_SetRxFiFo(&hpcd_USB1_OTG_HS, 0x200);
   HAL_PCDEx_SetTxFiFo(&hpcd_USB1_OTG_HS, 0, 0x40);
-  HAL_PCDEx_SetTxFiFo(&hpcd_USB1_OTG_HS, 1, 0x100);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB1_OTG_HS, 1, 0x80);
+  HAL_PCDEx_SetTxFiFo(&hpcd_USB1_OTG_HS, 2, 0xC0);
+
   return USBD_OK;
 }
 
@@ -670,33 +693,51 @@ void USBD_LL_Delay(uint32_t Delay)
 }
 
 /**
-  * @brief This function provides accurate delay (in milliseconds) based
-  * on SysTick counter flag.
-  * @note This function is declared as __weak to be overwritten in case of other
-  * implementations in user file.
-  * @param Delay: specifies the delay time length, in milliseconds.
-  * @retval None
-  */
-void HAL_Delay(__IO uint32_t Delay)
-{
-  while (Delay)
-  {
-    if (SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk)
-    {
-      Delay--;
-    }
-  }
-}
-
-/**
   * @brief  Static single allocation.
   * @param  size: Size of allocated memory
   * @retval None
   */
 void *USBD_static_malloc(uint32_t size)
 {
-  static uint32_t mem[(sizeof(USBD_HID_HandleTypeDef) / 4) + 1]; /* On 32-bit boundary */
-  return mem;
+  __IO uint8_t index = 0U, start = 0U;
+  uint8_t PageCount = 0U, NewStart = 0U;
+
+  if (size > 0U)
+  {
+    /* look for the first contiguous memory that meet requested size. */
+    while ( index < (MAX_PAGE_NUMBER + 1U))
+    {
+      if (memory_pool->PageTable[index++] == 0U)
+      {
+        PageCount = (size + SIZE_OF_PAGE) / SIZE_OF_PAGE;
+
+        if ((size % SIZE_OF_PAGE) == 0U)
+        {
+          PageCount--;
+        }
+
+        NewStart = start;
+
+        /* Set memory region state to allocated */
+        for (index = 0U; index < PageCount; index++)
+        {
+          memory_pool->PageTable[NewStart + index] = 1U;
+        }
+
+        /* Save size */
+        memory_pool->size[NewStart] = PageCount;
+
+        /* return pointer to allocated region. */
+        return (void *)(&memory_pool->pages[start][0]);
+      }
+      else
+      {
+        start = index;
+      }
+    }
+  }
+
+  return NULL;
 }
 
 /**
@@ -706,7 +747,36 @@ void *USBD_static_malloc(uint32_t size)
   */
 void USBD_static_free(void *p)
 {
+  __IO uint8_t index;
+  uint8_t counter, start;
 
+  /* Handle NULL pointers */
+  if (p == NULL)
+    return;
+
+  /* Find start Index */
+  uint8_t * address_start = (uint8_t*)p;
+  uint32_t byte_position_in_pages =  (uint32_t)(address_start - &memory_pool->pages[0][0]);
+  start = (uint8_t)( byte_position_in_pages / sizeof(memory_pool->pages[0]));
+
+  if (byte_position_in_pages > sizeof(memory_pool->pages))
+  {
+    assert(0);
+  }
+
+  /* Retrieve segment size */
+  counter = memory_pool->size[start];
+
+  /* Set size to zero */
+  memory_pool->size[start] = 0U;
+
+  /* Deallocate memory region */
+  for (index = 0; index < counter; index++)
+  {
+    memory_pool->PageTable[start + index] = 0U;
+  }
+
+  return;
 }
 
 /**

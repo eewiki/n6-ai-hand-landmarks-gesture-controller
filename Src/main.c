@@ -40,6 +40,8 @@
 #include "stai_palm_detector.h"
 #include "stai_hand_landmark.h"
 
+#include "usb_device.h"
+
 #ifndef APP_GIT_SHA1_STRING
 #define APP_GIT_SHA1_STRING "dev"
 #endif
@@ -200,6 +202,10 @@ static void SystemClock_Config(void)
   // Oscillator config already done in bootrom
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_NONE;
 
+  /* Enable HSE */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON; /* 48 MHz */
+
   /* PLL1 = 64 x 25 / 2 = 800MHz */
   RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSI;
@@ -355,6 +361,9 @@ static void main_thread_fct(void *arg)
    */
   SystemClock_Config();
   vPortSetupTimerInterrupt();
+
+  /* Initialize USB */
+  USB_Device_Init();
 
   CONSOLE_Config();
 

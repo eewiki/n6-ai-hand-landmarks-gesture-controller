@@ -57,6 +57,10 @@ extern "C" {
   * @{
   */
 
+#define USE_USB_HS
+
+#define SIZE_OF_PAGE                   64  /* 64 Bytes pages */
+#define MAX_PAGE_NUMBER                20  /* Handle a maximum of 128 pages */
 /*---------- -----------*/
 #define USBD_MAX_NUM_INTERFACES        1U
 /*---------- -----------*/
@@ -73,6 +77,25 @@ extern "C" {
 /****************************************/
 /* #define for FS and HS identification */
 #define DEVICE_HS                      0
+
+/* Activate the composite builder */
+#define USE_USBD_COMPOSITE
+#define USBD_COMPOSITE_USE_IAD         1U
+
+/* Activate HID and MSC classes in composite builder */
+#define USBD_CMPSIT_ACTIVATE_HID       1U
+#define USBD_CMPSIT_ACTIVATE_CDC       1U
+
+/* Set HID and MSC endpoints*/
+#define HID_EPIN_ADDR                  0x81U
+#define CDC_IN_EP                      0x82U  /* EP1 for data IN */
+#define CDC_CMD_EP                     0x83U  /* EP2 for CDC commands */
+
+/* The HID device is a keyboard */
+#define HID_IS_KEYBOARD
+
+/* Because somebody messed up... */
+#define USBD_LPM_SLEEP_CONFIG
 
 /**
   * @}

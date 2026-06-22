@@ -44,6 +44,9 @@
 #include "semphr.h"
 #include "utils.h"
 
+#include "usb_device.h"
+#include "usbd_cdc_if.h"
+
 #define FREERTOS_PRIORITY(p) ((UBaseType_t)((int)tskIDLE_PRIORITY + configMAX_PRIORITIES / 2 + (p)))
 
 #ifndef M_PI
@@ -233,11 +236,14 @@ static bqueue_t nn_input_queue;
 static StaticTask_t nn_thread;
 static StackType_t nn_thread_stack[2 * configMINIMAL_STACK_SIZE];
 static StaticTask_t dp_thread;
-static StackType_t dp_thread_stack[2 *configMINIMAL_STACK_SIZE];
+static StackType_t dp_thread_stack[2 * configMINIMAL_STACK_SIZE];
 static StaticTask_t isp_thread;
-static StackType_t isp_thread_stack[2 *configMINIMAL_STACK_SIZE];
+static StackType_t isp_thread_stack[2 * configMINIMAL_STACK_SIZE];
 static SemaphoreHandle_t isp_sem;
 static StaticSemaphore_t isp_sem_buffer;
+static StaticTask_t gst_thread;
+static TaskHandle_t h_gst_thread;
+static StackType_t gst_thread_stack[2 * configMINIMAL_STACK_SIZE];
 
 #if HAS_ROTATION_SUPPORT == 0
 /* Software resize buffer */
@@ -246,6 +252,18 @@ static void *pScratch[STAI_HAND_LANDMARK_IN_1_WIDTH * 2 * sizeof(uint16_t) + STA
 static GFXMMU_HandleTypeDef hgfxmmu;
 static nema_cmdlist_t cl;
 #endif
+
+static const uint8_t hand_presence_hyst = 30;
+static uint8_t hand_present_cnt = 0;
+static uint8_t hand_absent_cnt = 0xFF; // max value, assume start with hand not present
+static const uint16_t pd_dim_thresh_low = 40; // either PD dimension lower than this, no gesture
+static const uint8_t span_thresh_low = 25;
+static const uint8_t span_thresh_high = 30;
+static const uint8_t up_down_hyst = 5;
+static const uint16_t left_right_hyst = 10;
+static const uint16_t center_offset = 30;
+static int ld_screen_x[LD_LANDMARK_NB];
+static int ld_screen_y[LD_LANDMARK_NB];
 
 static int is_cache_enable()
 {
@@ -721,10 +739,11 @@ static void display_ld_hand(hand_info_t *hand)
 
   for (i = 0; i < LD_LANDMARK_NB; i++) {
     decode_ld_landmark(roi, &hand->ld_landmarks[i], &decoded);
-    x[i] = (int)decoded.x;
-    y[i] = (int)decoded.y;
+    x[i] = ld_screen_x[i] = (int)decoded.x;
+    y[i] = ld_screen_y[i] = (int)decoded.y;
     is_clamped[i] = clamp_point_with_margin(&x[i], &y[i], disk_radius);
   }
+  xTaskNotifyGive(h_gst_thread);
 
   for (i = 0; i < LD_LANDMARK_NB; i++) {
     if (is_clamped[i])
@@ -1252,10 +1271,13 @@ static void nn_thread_fct(void *arg)
     idx_for_resize = frame_event_nb_for_resize % DISPLAY_BUFFER_NB;
 
     /* Only start palm detector when not tracking hand */
-    if (!is_tracking) {
+    if (!is_tracking)
+    {
       is_tracking = palm_detector_run(capture_buffer, &pd_info, &pd_ms);
       box_next.prob = pd_info.pd_out.pOutData[0].prob;
-    } else {
+    }
+    else
+    {
       rois[0] = roi_next;
       copy_pd_box(&pd_info.pd_out.pOutData[0], &box_next);
       pd_ms = 0;
@@ -1268,7 +1290,43 @@ static void nn_thread_fct(void *arg)
       is_tracking = hand_landmark_run(lcd_bg_buffer[idx_for_resize], &hl_info, &rois[0], ld_landmarks[0]);
       CACHE_OP(SCB_InvalidateDCache_by_Addr(lcd_bg_buffer[idx_for_resize], sizeof(lcd_bg_buffer[idx_for_resize])));
       if (is_tracking)
+      {
         compute_next_roi(&rois[0], ld_landmarks[0], &roi_next, &box_next);
+      }
+    }
+
+    if (is_tracking && (MAX(pd_info.pd_out.pOutData[0].width, pd_info.pd_out.pOutData[0].height) >= pd_dim_thresh_low))
+    {
+      if (hand_present_cnt < hand_presence_hyst)
+      {
+        hand_present_cnt++;
+      }
+      else
+      {
+        hand_absent_cnt = 0;
+      }
+    }
+    else
+    {
+      if (hand_absent_cnt < hand_presence_hyst)
+      {
+        hand_absent_cnt++;
+
+        /* *just* before hand_absent_cnt reaches the threshold */
+        if (hand_absent_cnt == (hand_presence_hyst - 2))
+        {
+          USB_Device_DepressOnly((uint8_t[]){KEY_ESC}, 1);
+        }
+      }
+      else
+      {
+        if (hand_present_cnt != 0)
+        {
+          hand_present_cnt = 0;
+        }
+
+        USB_Device_DepressOnly((uint8_t[]){KEY_NONE}, 1);
+      }
     }
 
     /* update display stats */
@@ -1388,6 +1446,391 @@ static void isp_thread_fct(void *arg)
   }
 }
 
+void gst_get_thumb_ydiff(int16_t *diff_buff)
+{
+  uint8_t i;
+
+  for (i = 0; i < 4; i++)
+  {
+    diff_buff[i] = ld_screen_y[i+1] - ld_screen_y[i];
+  }
+}
+
+void gst_get_finger_ydiff(int16_t *diff_buff)
+{
+  uint8_t i;
+
+  for (i = 5; i < 19; i++)
+  {
+    *diff_buff = ld_screen_y[i+1] - ld_screen_y[i];
+    diff_buff++;
+    i++;
+
+    *diff_buff = ld_screen_y[i+1] - ld_screen_y[i];
+    diff_buff++;
+    i++;
+
+    *diff_buff = ld_screen_y[i+1] - ld_screen_y[i];
+    diff_buff++;
+    i++;
+  }
+}
+
+uint8_t gst_get_thumb_up_down(void)
+{
+  static uint8_t thumb_state = 0;
+  int16_t diff[4];
+
+  gst_get_thumb_ydiff(diff);
+
+  /* if thumb is pointed up */
+  if ((diff[0] < -up_down_hyst) && (diff[1] < -up_down_hyst) && (diff[2] < -up_down_hyst) && (diff[3] < -up_down_hyst))
+  {
+    thumb_state = 0x1;
+  }
+  /* if thumb is pointed down */
+  else if ((diff[0] > up_down_hyst) && (diff[1] > up_down_hyst) && (diff[2] > up_down_hyst) && (diff[3] > up_down_hyst))
+  {
+    thumb_state = 0x2;
+  }
+  else if (thumb_state == 0x1)
+  {
+    /* if thumb is not pointed up */
+    if ((diff[0] > 0) || (diff[1] > 0) || (diff[2] > 0) || (diff[3] > 0))
+    {
+      thumb_state = 0x0;
+    }
+  }
+  else if (thumb_state == 0x2)
+  {
+    /* if thumb is not pointed down */
+    if ((diff[0] < 0) || (diff[1] < 0) || (diff[2] < 0) || (diff[3] < 0))
+    {
+      thumb_state = 0x0;
+    }
+  }
+
+  return thumb_state;
+}
+
+/**
+  * @brief  Determines for each finger (not the thumb) whether it is pointing
+  *         up (0x1), pointing down (0x2), or not defined (0x0).
+  *         These states are returned packed into an 8-bit value as follows:
+  *         Bits: | 7    6  | 5    4  | 3    2  | 1    0  |
+  *         -----------------------------------------------
+  *               | finger4 | finger3 | finger2 | finger1 |
+  * @param  None
+  * @retval Finger states bitfield as described above
+  */
+uint8_t gst_get_finger_up_down(void)
+{
+  static uint8_t finger_states = 0;
+  int16_t diff[12];
+  int16_t *diff_ptr;
+  uint8_t i;
+
+  gst_get_finger_ydiff(diff);
+
+  diff_ptr = diff;
+  for (i = 0; i < 4; i++)
+  {
+    /* if finger 1 pointed up */
+    if ((*diff_ptr < -up_down_hyst) && (*(diff_ptr + 1) < -up_down_hyst) && (*(diff_ptr + 2) < -up_down_hyst))
+    {
+      finger_states &= ~(0x3 << (i << 1));
+      finger_states |= (0x1 << (i << 1));
+    }
+    /* if finger 1 pointed down */
+    else if ((*diff_ptr > up_down_hyst) && (*(diff_ptr + 1) > up_down_hyst) && (*(diff_ptr + 2) > up_down_hyst))
+    {
+      finger_states &= ~(0x3 << (i << 1));
+      finger_states |= (0x2 << (i << 1));
+    }
+    else if (finger_states & (0x1 << (i << 1)))
+    {
+      /* if finger is not up */
+      if ((*diff_ptr > 0) || (*(diff_ptr + 1) > 0) || (*(diff_ptr + 2) > 0))
+      {
+        finger_states &= ~(0x3 << (i << 1));
+      }
+    }
+    else if (finger_states & (0x2 << (i << 1)))
+    {
+      /* if finger is not down */
+      if ((*diff_ptr < 0) || (*(diff_ptr + 1) < 0) || (*(diff_ptr + 2) < 0))
+      {
+        finger_states &= ~(0x3 << (i << 1));
+      }
+    }
+
+    diff_ptr += 3;
+  }
+
+  return finger_states;
+}
+
+static uint8_t gst_check_tap(void)
+{
+  static uint8_t tap_state = 0;
+  uint16_t span;
+  int16_t x_diff, y_diff;
+
+  x_diff = ld_screen_x[8] - ld_screen_x[4];
+  y_diff = ld_screen_y[8] - ld_screen_y[4];
+  span = sqrt((x_diff * x_diff) + (y_diff * y_diff));
+
+  if (span < span_thresh_low)
+  {
+    tap_state = 1;
+  }
+  else if (span > span_thresh_high)
+  {
+    tap_state = 0;
+  }
+  return tap_state;
+}
+
+static uint8_t gst_check_up_down(void)
+{
+  uint8_t finger_states;
+
+  finger_states = gst_get_finger_up_down();
+  if (finger_states == 0x55)
+  {
+    return 1;
+  }
+  else if (finger_states == 0xAA)
+  {
+    return 2;
+  }
+  else
+  {
+    return 0;
+  }
+}
+
+static uint8_t gst_check_left(void)
+{
+  static uint8_t left_state = 0;
+  uint8_t i;
+  uint16_t thresh_low;
+  uint16_t thresh_high;
+
+  thresh_high = (LCD_BG_WIDTH / 2) - center_offset;
+  thresh_low = thresh_high - left_right_hyst;
+  for (i = 0; i < LD_LANDMARK_NB; i++)
+  {
+    if (ld_screen_x[i] > thresh_low)
+    {
+      if (ld_screen_x[i] > thresh_high)
+      {
+        left_state = 0;
+      }
+      return left_state;
+    }
+  }
+
+  left_state = 1;
+  return left_state;
+}
+
+static uint8_t gst_check_right(void)
+{
+  static uint8_t right_state = 0;
+  uint8_t i;
+  uint16_t thresh_low;
+  uint16_t thresh_high;
+
+  thresh_low = (LCD_BG_WIDTH / 2) + center_offset;
+  thresh_high = thresh_low + left_right_hyst;
+  for (i = 0; i < LD_LANDMARK_NB; i++)
+  {
+    if (ld_screen_x[i] < thresh_high)
+    {
+      if (ld_screen_x[i] < thresh_low)
+      {
+        right_state = 0;
+      }
+      return right_state;
+    }
+  }
+
+  right_state = 1;
+  return right_state;
+}
+
+static uint8_t gst_check_thumbsUp(void)
+{
+  int16_t span_y;
+
+  span_y = ld_screen_y[17] - ld_screen_y[5];
+  /* if knuckles are stacked vertically */
+  if (span_y > abs(ld_screen_x[17] - ld_screen_x[5]) << 1)
+  {
+    if (gst_get_thumb_up_down() == 0x1)
+    {
+      span_y >>= 1;
+      if ((abs(ld_screen_x[8] - ld_screen_x[5]) < span_y) &&
+          (abs(ld_screen_x[12] - ld_screen_x[9]) < span_y) &&
+          (abs(ld_screen_x[16] - ld_screen_x[13]) < span_y) &&
+          (abs(ld_screen_x[20] - ld_screen_x[17]) < span_y))
+      {
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
+/**
+  * @brief  Determines if the "number 1" or "number two" gesture is being made.
+  *         Support for other numbers could be added.
+  * @param  None
+  * @retval number 0 if no gesture, corresponding number otherwise
+  */
+static uint8_t gst_check_number(void)
+{
+  uint8_t finger_states;
+
+  /* if thumb bent inward */
+  if ((abs(ld_screen_x[4] - ld_screen_x[17]) < abs(ld_screen_x[3] - ld_screen_x[17])))
+  {
+    /* first finger not more than 33 degrees off vertical */
+    if ((ld_screen_y[5] - ld_screen_y[8]) > (abs(ld_screen_x[5] - ld_screen_x[8]) * 1.5))
+    {
+      finger_states = gst_get_finger_up_down();
+
+      /* if finger 1 pointed up and others not */
+      if (((finger_states & 0x1) == 0x1) && !(finger_states & 0x56))
+      {
+        return 1;
+      }
+      /* if fingers 1 and 2 pointed up and others not */
+      else if (((finger_states & 0x5) == 0x5) && !(finger_states & 0x5A))
+      {
+        return 2;
+      }
+    }
+  }
+
+  return 0;
+}
+
+static void gst_state_menu(void)
+{
+  uint8_t key;
+  uint8_t number_gst;
+
+  number_gst = gst_check_number();
+  if (number_gst == 1)
+  {
+    key = KEY_1;
+  }
+  else if (number_gst == 2)
+  {
+    key = KEY_2;
+  }
+  else
+  {
+    key = KEY_NONE;
+  }
+
+  USB_Device_DepressOnly(&key, 1);
+}
+
+static void gst_state_game1(void)
+{
+  uint8_t key;
+
+  if (gst_check_tap())
+  {
+    key = KEY_SPACE;
+  }
+  else
+  {
+    key = KEY_NONE;
+  }
+
+  USB_Device_DepressOnly(&key, 1);
+}
+
+static void gst_state_game2(void)
+{
+  uint8_t keys[2];
+  uint8_t cnt;
+  uint8_t gst_up_down;
+
+  gst_up_down = gst_check_up_down();
+
+  cnt = 0;
+  if (gst_up_down == 1)
+  {
+    keys[cnt] = KEY_UP;
+    cnt++;
+  }
+  else if (gst_up_down == 2)
+  {
+    keys[cnt] = KEY_DOWN;
+    cnt++;
+  }
+  else if (gst_check_thumbsUp())
+  {
+    keys[cnt] = KEY_SPACE;
+    cnt++;
+  }
+
+  if (gst_check_left())
+  {
+    keys[cnt] = KEY_LEFT;
+    cnt++;
+  }
+  else if (gst_check_right())
+  {
+    keys[cnt] = KEY_RIGHT;
+    cnt++;
+  }
+
+  if (cnt == 0)
+  {
+    keys[cnt] = KEY_NONE;
+    cnt++;
+  }
+
+  USB_Device_DepressOnly(keys, 2);
+}
+
+static void gst_thread_fct(void *arg)
+{
+  while (1)
+  {
+    /* wait for latest on-screen hand landmark positions */
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    if (hand_present_cnt >= hand_presence_hyst)
+    {
+      switch (ext_app_state)
+      {
+        case CDC_APP_STATE_MENU:
+          gst_state_menu();
+          break;
+
+        case CDC_APP_STATE_GAME1:
+          gst_state_game1();
+          break;
+
+        case CDC_APP_STATE_GAME2:
+          gst_state_game2();
+          break;
+
+        default:
+          break;
+      }
+    }
+  }
+}
+
 static void Display_init()
 {
   SCRL_LayerConfig layers_config[2] = {
@@ -1434,6 +1877,7 @@ void app_run()
   UBaseType_t isp_priority = FREERTOS_PRIORITY(2);
   UBaseType_t dp_priority = FREERTOS_PRIORITY(-2);
   UBaseType_t nn_priority = FREERTOS_PRIORITY(1);
+  UBaseType_t gst_priority = FREERTOS_PRIORITY(-1);
   TaskHandle_t hdl;
   int ret;
 
@@ -1472,12 +1916,18 @@ void app_run()
   hdl = xTaskCreateStatic(nn_thread_fct, "nn", configMINIMAL_STACK_SIZE * 2, NULL, nn_priority, nn_thread_stack,
                           &nn_thread);
   assert(hdl != NULL);
+
   hdl = xTaskCreateStatic(dp_thread_fct, "dp", configMINIMAL_STACK_SIZE * 2, NULL, dp_priority, dp_thread_stack,
                           &dp_thread);
   assert(hdl != NULL);
+
   hdl = xTaskCreateStatic(isp_thread_fct, "isp", configMINIMAL_STACK_SIZE * 2, NULL, isp_priority, isp_thread_stack,
                           &isp_thread);
   assert(hdl != NULL);
+
+  h_gst_thread = xTaskCreateStatic(gst_thread_fct, "gst", configMINIMAL_STACK_SIZE * 2, NULL, gst_priority, gst_thread_stack,
+                          &gst_thread);
+  assert(h_gst_thread != NULL);
 }
 
 int CMW_CAMERA_PIPE_FrameEventCallback(uint32_t pipe)
