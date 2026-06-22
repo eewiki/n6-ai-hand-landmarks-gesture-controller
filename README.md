@@ -1,6 +1,10 @@
-# x-cube-n6-ai-hand-landmarks Application
+# n6-ai-hand-landmarks-gesture-controller Application
 
-Computer Vision application demonstrating the deployment of several object detection models execution in series on the STM32N6570-DK board. The chosen use case is single-hand landmark detection. It consists of two models that execute sequentially:
+**This application is part of the [Hand Gesture Recognition at the Edge for Game Control with the STM32N6](https://forum.digikey.com/t/hand-gesture-recognition-at-the-edge-for-game-control-with-the-stm32n6/70163) demo.**
+
+---
+
+Computer Vision application demonstrating the deployment of several object detection models execution in series on the STM32N6570-DK board. Single-hand landmark detection is used to detect certain gestures and control a game system running on an external computer. It consists of two models that execute sequentially:
 
 1. A palm detection (pd) model is executed in the first stage to detect the hand’s palm.
 2. A hand landmark (hl) detection model is executed in the second stage to identify the landmarks of the hand detected during the first stage. After the execution of the first model, a resize operation takes place to provide the expected input to the second model.
@@ -39,7 +43,7 @@ This top README gives an overview of the app. Additional documentation is availa
 
 Supported development platforms:
 
-- [STM32N6570-DK](https://www.st.com/en/evaluation-tools/stm32n6570-dk.html) Discovery Board
+- [STM32N6570-DK](https://www.digikey.com/en/products/detail/stmicroelectronics/STM32N6570-DK/25724059) Discovery Board
   - Connect to the onboard ST-LINK debug adapter (CN6) using a __USB-C to USB-C cable__ for sufficient power.
   - OTP fuses are configured for xSPI IOs to achieve maximum speed (200MHz) on xSPI interfaces.
 
@@ -49,15 +53,13 @@ STM32N6570-DK board with MB1854B IMX335.
 Supported camera modules:
 
 - Provided IMX335 camera module
-- [STEVAL-55G1MBI](https://www.st.com/en/evaluation-tools/steval-55g1mbi.html)
-- [STEVAL-66GYMAI](https://www.st.com/en/evaluation-tools/steval-66gymai.html)
-- [STEVAL-1943-MC1](https://www.st.com/en/evaluation-tools/steval-1943-mc1.html)
+- [STEVAL-55G1MBI](https://www.digikey.com/en/products/detail/stmicroelectronics/STEVAL-55G1MBI1/24773985)
+- [STEVAL-66GYMAI](https://www.digikey.com/en/products/detail/stmicroelectronics/STEVAL-66GYMAI1/24742947)
 
 ---
 
 ## Tools Version
 
-- IAR Embedded Workbench for Arm (**EWARM 9.40.1**) + N6 patch ([**EWARMv9_STM32N6xx_V1.0.0**](STM32Cube_FW_N6/Utilities/PC_Software/EWARMv9_STM32N6xx_V1.0.0.zip))
 - [STM32CubeIDE](https://www.st.com/content/st_com/en/products/development-tools/software-development-tools/stm32-software-development-tools/stm32-ides/stm32cubeide.html) (__v1.17.0__)
 - [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html) (__v2.18.0__)
 - [STEdgeAI](https://www.st.com/en/development-tools/stedgeai-core.html) (__v3.0.0__)
@@ -98,28 +100,18 @@ The prebuilt binaries are an assembly of several binaries:
 To program the board's external flash, follow these steps:
 
 1. Set the board to [development mode](#boot-modes).
-2. Program `Binary/x-cube-n6-ai-hand-landmarks-dk.hex`.
-3. Set the board to [boot from flash mode](#boot-modes).
-4. Power cycle the board.
+2. Program `FSBL/ai_fsbl.hex` (to be done once) (First stage boot loader).
+3. Program `Model/palm_detector_data.hex` (parameters of the palm detector model).
+4. Program `Model/hand_landmark_data.hex` (parameters of the hand landmarks model).
+5. Program `Binary/n6-ai-hand-landmarks-gesture-controller-signed.bin` at address `0x70100000` (firmware application).
+6. Set the board to [boot from flash mode](#boot-modes).
+7. Power cycle the board.
 
 ---
 
-### How to Program Hex Files Using STM32CubeProgrammer UI
+### How to Program binary Files Using STM32CubeProgrammer UI
 
-See [How to program hex files STM32CubeProgrammer](Doc/Program-Hex-Files-STM32CubeProgrammer.md).
-
----
-
-### How to Program Hex Files Using Command Line
-
-Ensure the STM32CubeProgrammer `bin` folder is in your PATH.
-
-```bash
-export DKEL="<STM32CubeProgrammer_N6 Install Folder>/bin/ExternalLoader/MX66UW1G45G_STM32N6570-DK.stldr"
-
-# Application Firmware
-STM32_Programmer_CLI -c port=SWD mode=HOTPLUG -el $DKEL -hardRst -w Binary/x-cube-n6-ai-hand-landmarks-dk.hex
-```
+See [How to program binary files using STM32CubeProgrammer](Doc/Program-Hex-Files-STM32CubeProgrammer.md).
 
 ---
 
@@ -139,9 +131,6 @@ Set your board to [development mode](#development-mode).
 
 Double-click `STM32CubeIDE/STM32N6570-DK/.project` to open the project in STM32CubeIDE. Build and run the project.
 
-#### IAR EWARM
-
-Double-click `EWARM/STM32N6570-DK/x-cube-n6-ai-hand-landmarks-dk.eww` to open the project in IAR. Build and run the project.
 #### Makefile
 
 Run the following commands (ensure required tools are in your PATH):
@@ -174,10 +163,6 @@ Set your board to [development mode](#development-mode).
 ##### STM32CubeIDE
 
 Double-click `STM32CubeIDE/STM32N6570-DK/.project` to open the project in STM32CubeIDE. Build the project.
-
-##### IAR EWARM
-
-Double-click `EWARM/STM32N6570-DK/x-cube-n6-ai-hand-landmarks-dk.eww` to open the project in IAR. Build the project.
 
 ##### Makefile
 
